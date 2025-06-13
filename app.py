@@ -4,48 +4,72 @@ from geopy.distance import geodesic
 import folium
 from streamlit_folium import folium_static
 
-# Title
-st.title("Property Radius Search Tool")
-
-# Load data
+# Load full dataset
 @st.cache_data
 def load_data():
-    return pd.read_csv("property_data.csv")
+    df = pd.read_csv("property_data.csv")
+    df.columns = df.columns.str.strip().str.lower()
+    return df
 
 df = load_data()
 
-# User selects a property
-selected_address = st.selectbox("Select a Subject Property", df['address'].unique())
+# Input property_id
+property_id = st.number_input("Enter Property ID", step=1)
 
-# Radius input
-radius = st.slider("Radius (in miles)", min_value=0, max_value=50, value=5)
+# Radius selection
+radius_miles = st.slider("Radius (in miles)", min_value=1, max_value=25, value=5)
 
-# Get subject property coordinates
-subject = df[df['address'] == selected_address].iloc[0]
-subject_coords = (subject['latitude'], subject['longitude'])
+# Filter by property_id
+subject = df[df["property_id"] == property_id]
+if subject.empty:
+    st.warning("Property ID not found.")
+    st.stop()
 
-# Find properties within radius
+subject = subject.iloc[0]
+subject_coords = (subject["latitude"], subject["longitude"])
+
+# Bounding box filter for faster performance
+lat_min = subject["latitude"] - 0.075
+lat_max = subject["latitude"] + 0.075
+lon_min = subject["longitude"] - 0.075
+lon_max = subject["longitude"] + 0.075
+
+subset_df = df[
+    (df["latitude"].between(lat_min, lat_max)) &
+    (df["longitude"].between(lon_min, lon_max))
+].copy()
+
+# Geodesic filter
 def is_within_radius(row):
-    coords = (row['latitude'], row['longitude'])
-    return geodesic(subject_coords, coords).miles <= radius
+    return geodesic(subject_coords, (row["latitude"], row["longitude"])).miles <= radius_miles
 
-filtered_df = df[df.apply(is_within_radius, axis=1)].copy()
+comps = subset_df[subset_df.apply(is_within_radius, axis=1)]
+comps = comps[comps["property_id"] != property_id]
 
 # Map display
-m = folium.Map(location=subject_coords, zoom_start=13)
-folium.Marker(subject_coords, tooltip="Subject Property", icon=folium.Icon(color="red")).add_to(m)
+m = folium.Map(location=subject_coords, zoom_start=12)
+# Subject marker in red
+folium.Marker(
+    subject_coords,
+    tooltip=f"Subject: {subject['property_name_text']}",
+    icon=folium.Icon(color="red")
+).add_to(m)
 
-for _, row in filtered_df.iterrows():
-    if row['address'] != selected_address:
-        folium.Marker([row['latitude'], row['longitude']], tooltip=row['address']).add_to(m)
+# Comp markers in blue
+for _, row in comps.iterrows():
+    folium.Marker(
+        [row["latitude"], row["longitude"]],
+        tooltip=row["property_name_text"],
+        icon=folium.Icon(color="blue")
+    ).add_to(m)
 
 folium_static(m)
 
-# Property selection
-selected_props = st.multiselect("Select Properties from List Below", filtered_df['address'].tolist())
+# Multiselect output
+select_addresses = st.multiselect("Select Properties", comps["property_name_text"].tolist())
+selected = comps[comps["property_name_text"].isin(select_addresses)]
 
-# Display selected
-if selected_props:
-    selected_df = filtered_df[filtered_df['address'].isin(selected_props)]
-    st.dataframe(selected_df)
-    st.download_button("Download Selected Properties", selected_df.to_csv(index=False), file_name="selected_properties.csv")
+# Display + Download
+if not selected.empty:
+    st.dataframe(selected)
+    st.download_button("Download Selected as CSV", selected.to_csv(index=False), file_name="selected_properties.csv")
