@@ -6,7 +6,7 @@ from streamlit_folium import folium_static
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("property_data_geocoded.csv")  # ✅ Using the updated geocoded dataset
+    df = pd.read_csv("property_data_geocoded.csv")
     df.columns = df.columns.str.strip().str.lower()
     return df
 
@@ -23,7 +23,7 @@ if subject.empty:
 subject = subject.iloc[0]
 subject_coords = (subject["latitude"], subject["longitude"])
 
-# Bounding box filter for faster performance
+# Bounding box filter
 lat_min = subject["latitude"] - 0.075
 lat_max = subject["latitude"] + 0.075
 lon_min = subject["longitude"] - 0.075
@@ -43,22 +43,52 @@ comps = comps[comps["property_id"] != property_id]
 
 # Map
 m = folium.Map(location=subject_coords, zoom_start=12)
-folium.Marker(subject_coords, tooltip=f"Subject: {subject['property_name_text']}",
+
+# Subject marker
+folium.Marker(subject_coords,
+              tooltip=f"Subject: {subject['property_name_text']}",
+              popup=subject["address_line1_text"],
               icon=folium.Icon(color="red")).add_to(m)
 
+# Comp markers with detailed popup
 for _, row in comps.iterrows():
+    popup_content = f"""
+    <b>{row['property_name_text']}</b><br>
+    {row['address_line1_text']}<br>
+    {row['city_name_text']}, {row['state_code']} {row['zip_code']}<br>
+    Units: {row['property_total_unit_count']}<br>
+    Owner: {row['owner_contact_email_text']}<br>
+    Manager: {row['mgmt_contact_email_text']}<br>
+    Lat/Lon: ({row['latitude']}, {row['longitude']})
+    """
     folium.Marker(
         [row["latitude"], row["longitude"]],
         tooltip=row["property_name_text"],
+        popup=folium.Popup(popup_content, max_width=300),
         icon=folium.Icon(color="blue")
     ).add_to(m)
 
 folium_static(m)
 
-# Multiselect + download
-select_addresses = st.multiselect("Select Properties", comps["property_name_text"].tolist())
+# Dropdown (sorted)
+select_addresses = st.multiselect(
+    "Select Properties",
+    sorted(comps["property_name_text"].tolist())
+)
 selected = comps[comps["property_name_text"].isin(select_addresses)]
 
+# Display + CSV + Clipboard
 if not selected.empty:
     st.dataframe(selected)
-    st.download_button("Download Selected as CSV", selected.to_csv(index=False), file_name="selected_properties.csv")
+
+    # Clipboard-friendly output
+    property_ids = selected["property_id"].astype(str).tolist()
+    clipboard_string = ", ".join(property_ids)
+    st.code(clipboard_string, language="text")
+    st.caption("⬆️ Copy above Property IDs (automatically selectable)")
+
+    st.download_button(
+        "Download Selected as CSV",
+        selected.to_csv(index=False),
+        file_name="selected_properties.csv"
+    )
